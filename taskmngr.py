@@ -22,9 +22,7 @@ class NS:
         return self.__dict__ == other.__dict__
 
     def join(self, other):
-        return SN(self.__dict__, **kwargs)
-
-SN = SimpleNamespace
+        return NS(self.__dict__, **kwargs)
 
 atoms = [
         "_NET_CLIENT_LIST",
@@ -42,11 +40,40 @@ class WindowManager(object):
         self.disp = display.Display()
         self.scr = self.disp.screen()
         self.root = self.scr.root
+        for a in atoms:
+            setattr(self, a, self.disp.intern_atom(a))
         self.clients = {}
         self.order = []
 
+    # TODO: listen to events from server instead
+    def update_state(self):
+        tasks = self.root.get_full_property(self._NET_CLIENT_LIST_STACKING, Xatom.WINDOW).value
+        self.order = tasks
+        self.clients = {}
+        for wid in tasks:
+            o = self.disp.create_resource_object("window", wid)
+            name = o.get_full_property(self._NET_WM_NAME, 0)
+            if not name:
+                name = o.get_full_property(Xatom.WM_NAME, 0)
+            title = name.value
+            desktop = o.get_full_property(self._NET_WM_DESKTOP, Xatom.CARDINAL).value[0]
+            self.clients[wid] = NS(title=title, desktop=desktop)
+
+    #TODO: push updates instead
     def get_state(self):
-        return [ dict(kind="task", tid="wm:wid/204262", label="% ~") ]
+        self.update_state()
+        tasks = []
+        d = 0
+        for i,wid in enumerate(self.order):
+            c = self.clients[wid]
+            tid = "wm:wid/{}".format(wid)
+            gid = "wm:ws/{}".format(c.desktop)
+            d = max(d,c.desktop)
+            tasks.append( dict(kind="window", tid=tid, parent=gid, title=c.title, order=i))
+        for i in range(d+1):
+            # FIXME: proper names
+            tasks.append( dict(kind="desktop", tid="wm:ws/{}".format(i), title="Workspace {}".format(i+1)))
+        return tasks
 
     def activate(self, tid):
         wid = stripoff(tid,"wm:wid/")
@@ -96,7 +123,7 @@ class TaskManager:
 
         tasks = defaultdict(dict)
         for t in chain(*self.sourceState.values()):
-            if t['kind'] == "task":
+            if 'tid' in t:
                 tasks[t['tid']].update(t)
 
         return tasks.values()
